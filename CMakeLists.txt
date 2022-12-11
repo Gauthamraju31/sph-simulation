@@ -1,29 +1,45 @@
-cmake_minimum_required( VERSION 3.10.0 )
-project( sph-benchmark )
+cmake_minimum_required( VERSION 3.10.2 )
+project( sph-demo )
 
-# external glfw
-set( GLFW_BUILD_DOCS OFF CACHE INTERNAL "" )
-set( GLFW_BUILD_TESTS OFF CACHE INTERNAL "" )
-set( GLFW_BUILD_EXAMPLES OFF CACHE INTERNAL "" )
-add_subdirectory( external/glfw )
+set(IMGUI_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/imgui)
 
-# make sure we have OpenMP C++ support
+find_package( OpenGL REQUIRED)
+find_package( glfw3 REQUIRED )
 find_package( OpenMP REQUIRED CXX )
 
-# external includes
-include_directories( SYSTEM "external/glm" )
-include_directories( SYSTEM "external/glad/include" )
+include_directories( SYSTEM "external/glm")
+include_directories ("include")
 
-# application code
-include_directories( "include" )
 add_executable(
-    sph-benchmark
-    "src/main.cpp"
-    "external/glad/src/glad.c" )
+	sph-demo
+	"src/world.cpp"
+	"src/main.cpp")
+
+target_sources( sph-demo
+                PRIVATE
+                    ${IMGUI_DIR}/imgui_demo.cpp
+                    ${IMGUI_DIR}/imgui_draw.cpp
+                    ${IMGUI_DIR}/imgui_tables.cpp
+                    ${IMGUI_DIR}/imgui_widgets.cpp
+                    ${IMGUI_DIR}/imgui.cpp
+
+                PRIVATE
+                    ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+                    ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp
+                )
+
+target_include_directories( sph-demo
+                            PUBLIC ${IMGUI_DIR}
+                            PUBLIC ${IMGUI_DIR}/backends
+                            )
+
 target_compile_features(
-    sph-benchmark
+    sph-demo
     PUBLIC cxx_std_11 )
 target_link_libraries(
-    sph-benchmark
+    sph-demo
+    PUBLIC ${OPENGL_LIBRARY}
+    PUBLIC ${OPENGL_gl_LIBRARY}
     PRIVATE glfw
-    PRIVATE OpenMP::OpenMP_CXX )
+    PRIVATE OpenMP::OpenMP_CXX 
+    PUBLIC ${CMAKE_DL_LIBS})

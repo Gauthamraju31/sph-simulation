@@ -1,387 +1,18 @@
-// Real-Time Physics Tutorials
-// Brandon Pelfrey
-// SPH Fluid Simulation
-#include <glad/glad.h>
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
-#include <omp.h>
-#include <chrono>
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <cmath>
-#include <unordered_map>
+#include "world.h"
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_opengl3.h"
+#include <stdio.h>
+#define GL_SILENCE_DEPRECATION
+#include <GLFW/glfw3.h> // Will drag system OpenGL headers
 
-// --------------------------------------------------------------------
-// Between [0,1]
-float rand01()
+static void glfw_error_callback(int error, const char* description)
 {
-    return (float)rand() * (1.f / RAND_MAX);
+    fprintf(stderr, "Glfw Error %d: %s\n", error, description);
 }
 
-// --------------------------------------------------------------------
-// Between [a,b]
-float randab(float a, float b)
-{
-    return a + (b-a)*rand01();
-}
 
-// --------------------------------------------------------------------
-// A structure for holding two neighboring particles and their weighted distances
-struct Particle;
-struct Neighbor
-{
-    Particle* j;
-    float q, q2;
-};
-
-// The Particle structure holding all of the relevant information.
-struct Particle
-{
-    glm::vec2 pos;
-    float r, g, b;
-
-    glm::vec2 pos_old;
-    glm::vec2 vel;
-    glm::vec2 force;
-    float mass;
-    float rho;
-    float rho_near;
-    float press;
-    float press_near;
-    float sigma;
-    float beta;
-    std::vector< Neighbor > neighbors;
-};
-
-// Our collection of particles
-std::vector< Particle > particles;
-
-// --------------------------------------------------------------------
-const float G = .02f * .25;           // Gravitational Constant for our simulation
-const float spacing = 2.f;            // Spacing of particles
-const float k = spacing / 1000.0f;    // Far pressure weight
-const float k_near = k * 10;          // Near pressure weight
-const float rest_density = 3;         // Rest Density
-const float r = spacing * 1.25f;      // Radius of Support
-const float rsq = r * r;              // ... squared for performance stuff
-const float SIM_W = 50;               // The size of the world
-const float bottom = 0;               // The floor of the world
-
-// --------------------------------------------------------------------
-void init( const unsigned int N )
-{
-    // Initialize particles
-    // We will make a block of particles with a total width of 1/4 of the screen.
-    float w = SIM_W / 4;
-    for( float y = bottom + 1; y <= 10000; y += r * 0.5f )
-    {
-        for(float x = -w; x <= w; x += r * 0.5f )
-        {
-            if( particles.size() > N )
-            {
-                break;
-            }
-
-            Particle p;
-            p.pos = glm::vec2(x, y);
-            p.pos_old = p.pos + 0.001f * glm::vec2(rand01(), rand01());
-            p.force = glm::vec2(0,0);
-            p.sigma = 3.f;
-            p.beta = 4.f;
-            particles.push_back(p);
-        }
-    }
-}
-
-// Mouse attractor
-glm::vec2 attractor(999,999);
-bool attracting = false;
-
-// --------------------------------------------------------------------
-template< typename T >
-class SpatialIndex
-{
-public:
-    typedef std::vector< T* > NeighborList;
-
-    SpatialIndex
-        (
-        const unsigned int numBuckets,  // number of hash buckets
-        const float cellSize,           // grid cell size
-        const bool twoDeeNeighborhood   // true == 3x3 neighborhood, false == 3x3x3
-        )
-        : mHashMap( numBuckets )
-        , mInvCellSize( 1.0f / cellSize )
-    {
-        // initialize neighbor offsets
-        for( int i = -1; i <= 1; i++ )
-            for( int j = -1; j <= 1; j++ )
-                if( twoDeeNeighborhood )
-                    mOffsets.push_back( glm::ivec3( i, j, 0 ) );
-                else
-                    for( int k = -1; k <= 1; k++ )
-                        mOffsets.push_back( glm::ivec3( i, j, k ) );
-    }
-
-    void Insert( const glm::vec3& pos, T* thing )
-    {
-        mHashMap[ Discretize( pos, mInvCellSize ) ].push_back( thing );
-    }
-
-    void Neighbors( const glm::vec3& pos, NeighborList& ret ) const
-    {
-        const glm::ivec3 ipos = Discretize( pos, mInvCellSize );
-        for( const auto& offset : mOffsets )
-        {
-            typename HashMap::const_iterator it = mHashMap.find( offset + ipos );
-            if( it != mHashMap.end() )
-            {
-                ret.insert( ret.end(), it->second.begin(), it->second.end() );
-            }
-        }
-    }
-
-    void Clear()
-    {
-        mHashMap.clear();
-    }
-
-private:
-    // "Optimized Spatial Hashing for Collision Detection of Deformable Objects"
-    // Teschner, Heidelberger, et al.
-    // returns a hash between 0 and 2^32-1
-    struct TeschnerHash : std::unary_function< glm::ivec3, std::size_t >
-    {
-        std::size_t operator()( glm::ivec3 const& pos ) const
-        {
-            const unsigned int p1 = 73856093;
-            const unsigned int p2 = 19349663;
-            const unsigned int p3 = 83492791;
-            return size_t( ( pos.x * p1 ) ^ ( pos.y * p2 ) ^ ( pos.z * p3 ) );
-        };
-    };
-
-    // returns the indexes of the cell pos is in, assuming a cellSize grid
-    // invCellSize is the inverse of the desired cell size
-    static inline glm::ivec3 Discretize( const glm::vec3& pos, const float invCellSize )
-    {
-        return glm::ivec3( glm::floor( pos * invCellSize ) );
-    }
-
-    typedef std::unordered_map< glm::ivec3, NeighborList, TeschnerHash > HashMap;
-    HashMap mHashMap;
-
-    std::vector< glm::ivec3 > mOffsets;
-
-    const float mInvCellSize;
-};
-
-typedef SpatialIndex< Particle > IndexType;
-IndexType indexsp( 4093, r, true );
-
-// --------------------------------------------------------------------
-void step()
-{
-    // UPDATE
-    // This modified verlet integrator has dt = 1 and calculates the velocity
-    // For later use in the simulation.
-#pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
-    {
-        // Apply the currently accumulated forces
-        particles[i].pos += particles[i].force;
-
-        // Restart the forces with gravity only. We'll add the rest later.
-        particles[i].force = glm::vec2( 0.0f, -::G );
-
-        // Calculate the velocity for later.
-        particles[i].vel = particles[i].pos - particles[i].pos_old;
-
-        // If the velocity is really high, we're going to cheat and cap it.
-        // This will not damp all motion. It's not physically-based at all. Just
-        // a little bit of a hack.
-        const float max_vel = 2.0f;
-        const float vel_mag = glm::dot( particles[i].vel, particles[i].vel );
-        // If the velocity is greater than the max velocity, then cut it in half.
-        if( vel_mag > max_vel * max_vel )
-        {
-            particles[i].vel *= .5f;
-        }
-
-        // Normal verlet stuff
-        particles[i].pos_old = particles[i].pos;
-        particles[i].pos += particles[i].vel;
-
-        // If the Particle is outside the bounds of the world, then
-        // Make a little spring force to push it back in.
-        if( particles[i].pos.x < -SIM_W ) particles[i].force.x -= ( particles[i].pos.x - -SIM_W ) / 8;
-        if( particles[i].pos.x >  SIM_W ) particles[i].force.x -= ( particles[i].pos.x - SIM_W ) / 8;
-        if( particles[i].pos.y < bottom ) particles[i].force.y -= ( particles[i].pos.y - bottom ) / 8;
-        //if( particles[i].pos.y > SIM_W * 2 ) particles[i].force.y -= ( particles[i].pos.y - SIM_W * 2 ) / 8;
-
-        // Handle the mouse attractor.
-        // It's a simple spring based attraction to where the mouse is.
-        const float attr_dist2 = glm::dot( particles[i].pos - attractor, particles[i].pos - attractor );
-        const float attr_l = SIM_W / 4;
-        if( attracting )
-        {
-            if( attr_dist2 < attr_l * attr_l )
-            {
-                particles[i].force -= ( particles[i].pos - attractor ) / 256.0f;
-            }
-        }
-
-        // Reset the nessecary items.
-        particles[i].rho = 0;
-        particles[i].rho_near = 0;
-        particles[i].neighbors.clear();
-    }
-
-    // update spatial index
-    indexsp.Clear();
-    for( auto& particle : particles )
-    {
-        indexsp.Insert( glm::vec3( particle.pos, 0.0f ), &particle );
-    }
-
-    // DENSITY
-    // Calculate the density by basically making a weighted sum
-    // of the distances of neighboring particles within the radius of support (r)
-#pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
-    {
-        particles[i].rho = 0;
-        particles[i].rho_near = 0;
-
-        // We will sum up the 'near' and 'far' densities.
-        float d = 0;
-        float dn = 0;
-
-        IndexType::NeighborList neigh;
-        neigh.reserve( 64 );
-        indexsp.Neighbors( glm::vec3( particles[i].pos, 0.0f ), neigh );
-        for( int j = 0; j < (int)neigh.size(); ++j )
-        {
-            if( neigh[j] == &particles[i] )
-            {
-                // do not calculate an interaction for a Particle with itself!
-                continue;
-            }
-
-            // The vector seperating the two particles
-            const glm::vec2 rij = neigh[j]->pos - particles[i].pos;
-
-            // Along with the squared distance between
-            const float rij_len2 = glm::dot( rij, rij );
-
-            // If they're within the radius of support ...
-            if( rij_len2 < rsq )
-            {
-                // Get the actual distance from the squared distance.
-                float rij_len = sqrt( rij_len2 );
-
-                // And calculated the weighted distance values
-                const float q = 1 - ( rij_len / r );
-                const float q2 = q * q;
-                const float q3 = q2 * q;
-
-                d += q2;
-                dn += q3;
-
-                // Set up the Neighbor list for faster access later.
-                Neighbor n;
-                n.j = neigh[j];
-                n.q = q;
-                n.q2 = q2;
-                particles[i].neighbors.push_back(n);
-            }
-        }
-
-        particles[i].rho += d;
-        particles[i].rho_near += dn;
-    }
-
-    // PRESSURE
-    // Make the simple pressure calculation from the equation of state.
-#pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
-    {
-        particles[i].press = k * ( particles[i].rho - rest_density );
-        particles[i].press_near = k_near * particles[i].rho_near;
-    }
-
-    // PRESSURE FORCE
-    // We will force particles in or out from their neighbors
-    // based on their difference from the rest density.
-#pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
-    {
-        // For each of the neighbors
-        glm::vec2 dX( 0 );
-        for( const Neighbor& n : particles[i].neighbors )
-        {
-            // The vector from Particle i to Particle j
-            const glm::vec2 rij = (*n.j).pos - particles[i].pos;
-
-            // calculate the force from the pressures calculated above
-            const float dm
-                = n.q * ( particles[i].press + (*n.j).press )
-				+ n.q2 * ( particles[i].press_near + (*n.j).press_near );
-
-            // Get the direction of the force
-            const glm::vec2 D = glm::normalize( rij ) * dm;
-            dX += D;
-        }
-
-        particles[i].force -= dX;
-    }
-
-    // VISCOSITY
-    // This simulation actually may look okay if you don't compute
-    // the viscosity section. The effects of numerical damping and
-    // surface tension will give a smooth appearance on their own.
-    // Try it.
-#pragma omp parallel for
-    for( int i = 0; i < (int)particles.size(); ++i )
-    {
-        // We'll let the color be determined by
-        // ... x-velocity for the red component
-        // ... y-velocity for the green-component
-        // ... pressure for the blue component
-        particles[i].r = 0.3f + (20 * fabs(particles[i].vel.x) );
-        particles[i].g = 0.3f + (20 * fabs(particles[i].vel.y) );
-        particles[i].b = 0.3f + (0.1f * particles[i].rho );
-
-        // For each of that particles neighbors
-        for( const Neighbor& n : particles[i].neighbors )
-        {
-            const glm::vec2 rij = (*n.j).pos - particles[i].pos;
-            const float l = glm::length( rij );
-            const float q = l / r;
-
-            const glm::vec2 rijn = ( rij / l );
-            // Get the projection of the velocities onto the vector between them.
-            const float u = glm::dot( particles[i].vel - (*n.j).vel, rijn );
-            if( u > 0 )
-            {
-                // Calculate the viscosity impulse between the two particles
-                // based on the quadratic function of projected length.
-                const glm::vec2 I
-                    = ( 1 - q )
-                    * ( (*n.j).sigma * u + (*n.j).beta * u * u )
-                    * rijn;
-
-                // Apply the impulses on the current particle
-                particles[i].vel -= I * 0.5f;
-            }
-        }
-    }
-}
-
-// --------------------------------------------------------------------
-void display( GLFWwindow* window )
+void display( GLFWwindow* window, std::vector<Particle> particles)
 {
     glClearColor( 0, 0, 0, 1 );
     glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
@@ -394,15 +25,15 @@ void display( GLFWwindow* window )
     glMatrixMode( GL_PROJECTION );
     glLoadIdentity();
     const double ar = w / static_cast< double >( h );
-    glOrtho( ar * -SIM_W, ar * SIM_W, 0, 2*SIM_W, -1, 1 );
+    glOrtho( ar * -worldConstants::SIM_W, ar * worldConstants::SIM_W, 0, 2*worldConstants::SIM_W, -1, 1 );
 
     glMatrixMode( GL_MODELVIEW );
     glLoadIdentity();
 
     // Draw Fluid Particles
-    glPointSize( r*2 );
+    glPointSize( worldConstants::r*2 );
     glVertexPointer( 2, GL_FLOAT, sizeof(Particle), &particles[0].pos );
-    glColorPointer( 3, GL_FLOAT, sizeof(Particle), &particles[0].r );
+    glColorPointer( 4, GL_FLOAT, sizeof(Particle), &particles[0].r );
     glEnableClientState( GL_VERTEX_ARRAY );
     glEnableClientState( GL_COLOR_ARRAY );
     glDrawArrays( GL_POINTS, 0, static_cast< GLsizei >( particles.size() ) );
@@ -410,136 +41,121 @@ void display( GLFWwindow* window )
     glDisableClientState( GL_COLOR_ARRAY );
 }
 
-// --------------------------------------------------------------------
-unsigned int stepsPerFrame = 1;
-void keyboard( GLFWwindow* window, int key, int scancode, int action, int mods )
+
+int main(int, char**)
 {
-    if( action == GLFW_PRESS )
-    {
-        return;
-    }
+    // Setup window
+    glfwSetErrorCallback(glfw_error_callback);
+    if (!glfwInit())
+        return 1;
 
-    const float radius = SIM_W / 8;
-    switch( key )
-    {
-    case GLFW_KEY_ESCAPE:
-    case GLFW_KEY_Q:
-        glfwSetWindowShouldClose( window, 1 );
-        break;
-    case GLFW_KEY_SPACE:
-        // add some particles.
-        for( float y = SIM_W * 2 - radius; y <= SIM_W * 2 + radius; y += r * .5f )
-        {
-            for( float x = -radius; x <= radius; x += r * .5f )
-            {
-                Particle p;
-                p.pos = p.pos_old = glm::vec2(x , y) + glm::vec2(rand01(), rand01());
-                p.force = glm::vec2(0,0);
-                p.sigma = 3.f;
-                p.beta = 4.f;
-
-                const glm::vec2 temp( p.pos - glm::vec2( 0, SIM_W * 2 ) );
-                if( glm::dot( temp, temp ) < radius * radius )
-                {
-                    particles.push_back(p);
-                }
-            }
-        }
-        break;
-    case GLFW_KEY_MINUS:
-    case GLFW_KEY_KP_SUBTRACT:
-        if( stepsPerFrame > 1 ) stepsPerFrame--;
-        break;
-    case GLFW_KEY_EQUAL:
-    case GLFW_KEY_KP_ADD:
-        stepsPerFrame++;
-        break;
-    }
-}
-
-// --------------------------------------------------------------------
-void motion( GLFWwindow* window, double xpos, double ypos )
-{
-    // This simply updates the location of the mouse attractor.
-    int window_w, window_h;
-    glfwGetWindowSize( window, &window_w, &window_h ); 
-    float relx = (float)(xpos - window_w/2) / window_w;
-    float rely = -(float)(ypos - window_h) / window_h;
-    glm::vec2 mouse = glm::vec2(relx*SIM_W*2, rely*SIM_W*2);
-    attractor = mouse;
-}
-
-// --------------------------------------------------------------------
-void mouse( GLFWwindow* window, int button, int action, int mods )
-{
-    if( action == GLFW_PRESS )
-    {
-        attracting = true;
-    }
-    else
-    {
-        attracting = false;
-        attractor = glm::vec2(SIM_W * 99, SIM_W * 99);
-    }
-}
-
-// --------------------------------------------------------------------
-int main( int argc, char** argv )
-{
-#if 0
-    const int steps = 3000;
-    std::cout << "--------------------------------" << std::endl;
-    std::cout  << "Number of steps: " << steps << std::endl;
-    for( unsigned int size = 10; size <= 13; ++size )
-    {
-        const unsigned int count = ( 1 << size );
-        std::cout << "Number of particles: " << count << std::endl;
-
-        init( count );
-
-        const auto beg = std::chrono::high_resolution_clock::now();
-        for( unsigned int i = 0; i < steps; ++i )
-        {
-            step();
-        }
-        const auto end = std::chrono::high_resolution_clock::now();
-
-        const auto duration( end - beg );
-        std::cout << "Elapsed time: " << std::chrono::duration_cast< std::chrono::milliseconds >( duration ).count() << " milliseconds" << std::endl;
-        std::cout << "Microseconds per step: " << std::chrono::duration_cast< std::chrono::microseconds >( duration ).count() / (double)steps << std::endl;
-        std::cout << std::endl;
-    }
-
-    return 0;
+    // Decide GL+GLSL versions
+#if defined(IMGUI_IMPL_OPENGL_ES2)
+    // GL ES 2.0 + GLSL 100
+    const char* glsl_version = "#version 100";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 2);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_ES_API);
+#elif defined(__APPLE__)
+    // GL 3.2 + GLSL 150
+    const char* glsl_version = "#version 150";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);  // 3.2+ only
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);            // Required on Mac
 #else
-    init( 2048 );
+    // GL 3.0 + GLSL 130
+    const char* glsl_version = "#version 130";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+    //glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);  // 3.2+ only
+    //glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);            // 3.0+ only
+#endif
 
-    glfwInit();
-    GLFWwindow* window = glfwCreateWindow( 512, 512, "SPH", NULL, NULL );
-    glfwMakeContextCurrent( window );
-    gladLoadGLLoader( (GLADloadproc)glfwGetProcAddress );
+    // Create window with graphics context
+    GLFWwindow* window = glfwCreateWindow(512, 512, "SPH Demo", NULL, NULL);
+    if (window == NULL)
+        return 1;
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(1); // Enable vsync
 
-    glfwSwapInterval( 1 );
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+    //io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
 
-    glfwSetKeyCallback( window, keyboard );
-    glfwSetCursorPosCallback( window, motion );
-    glfwSetMouseButtonCallback( window, mouse );
+    // Setup Dear ImGui style
+    ImGui::StyleColorsDark();
+    //ImGui::StyleColorsLight();
 
-    while( !glfwWindowShouldClose( window ) )
+    // Setup Platform/Renderer backends
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+    ImGui_ImplOpenGL3_Init(glsl_version);
+
+    // Load Fonts
+    // - If no fonts are loaded, dear imgui will use the default font. You can also load multiple fonts and use ImGui::PushFont()/PopFont() to select them.
+    // - AddFontFromFileTTF() will return the ImFont* so you can store it if you need to select the font among multiple.
+    // - If the file cannot be loaded, the function will return NULL. Please handle those errors in your application (e.g. use an assertion, or display an error and quit).
+    // - The fonts will be rasterized at a given size (w/ oversampling) and stored into a texture when calling ImFontAtlas::Build()/GetTexDataAsXXXX(), which ImGui_ImplXXXX_NewFrame below will call.
+    // - Use '#define IMGUI_ENABLE_FREETYPE' in your imconfig file to use Freetype for higher quality font rendering.
+    // - Read 'docs/FONTS.md' for more instructions and details.
+    // - Remember that in C/C++ if you want to include a backslash \ in a string literal you need to write a double backslash \\ !
+    //io.Fonts->AddFontDefault();
+    //io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\segoeui.ttf", 18.0f);
+    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/DroidSans.ttf", 16.0f);
+    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Roboto-Medium.ttf", 16.0f);
+    //io.Fonts->AddFontFromFileTTF("../../misc/fonts/Cousine-Regular.ttf", 15.0f);
+    //ImFont* font = io.Fonts->AddFontFromFileTTF("c:\\Windows\\Fonts\\ArialUni.ttf", 18.0f, NULL, io.Fonts->GetGlyphRangesJapanese());
+    //IM_ASSERT(font != NULL);
+
+    World world;
+    printf("Start\n");
+
+    // Main loop
+    while (!glfwWindowShouldClose(window))
     {
-        display( window );
-
+        // Poll and handle events (inputs, window resize, etc.)
+        // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
+        // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
+        // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
+        // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
         glfwPollEvents();
 
-        for( size_t i = 0; i < stepsPerFrame; ++i )
+        // Start the Dear ImGui frame
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        // 2. Show a simple window that we create ourselves. We use a Begin/End pair to create a named window.
         {
-            step();
+            static float f = 0.0f;
+            static int counter = 0;
+
+            ImGui::Begin("SPH Simulation");                          
+            ImGui::Text("World Parameters");
+            ImGui::Text("Particle Emitter Parameters");       
+            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
+            ImGui::End();
         }
 
-        glfwSwapBuffers( window );
+        // Rendering
+        ImGui::Render();
+        display(window, world.particle_emitter.particles);
+        world.step();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        glfwSwapBuffers(window);
     }
 
+    // Cleanup
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+
+    glfwDestroyWindow(window);
     glfwTerminate();
+
     return 0;
-#endif
 }
