@@ -1,4 +1,4 @@
-sph-tutorial
+SPH Simulation
 ============
 
 Experimenting with performance evaluation and improvements to Brandon Pelfrey's [smoothed-particle hydrodynamics (SPH)](https://en.wikipedia.org/wiki/Smoothed-particle_hydrodynamics) fluid simulation tutorial:
@@ -24,8 +24,7 @@ You can use the [`OMP_NUM_THREADS` environment variable](https://gcc.gnu.org/onl
 
 ##### Dependencies
 
-Appropriate versions of [GLFW](https://www.glfw.org/) and [GLM](https://glm.g-truc.net/) are included as submodules so there's no need to install them separately.
-
+Appropriate versions of [GLM](https://glm.g-truc.net/) is included as submodules so there's no need to install it separately. However GLFW is needed to be installed seperately.
 GLFW has some platform-specific build dependencies:
 
 * Linux
@@ -38,18 +37,10 @@ GLFW has some platform-specific build dependencies:
       libxcursor-dev \
       libxi-dev \
 
-* Windows
-
-      TBD
-
-* macOS
-
-      TBD
-
 ##### Building
 
-    git clone --recurse-submodules https://github.com/genpfault/sph-tutorial.git
-    cd sph-tutorial
+    git clone --recurse-submodules https://github.com/Gauthamraju31/sph-simulation.git
+    cd sph-simulation
     mkdir build
     cd build
     cmake ../ -DCMAKE_BUILD_TYPE=RelWithDebInfo
