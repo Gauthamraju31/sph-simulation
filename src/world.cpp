@@ -22,23 +22,27 @@ ParticleEmitter::ParticleEmitter(const unsigned int N, float l) : max_particles{
   {
     for (float x = -w; x <= w; x += worldConstants::r * 0.5f)
     {
-      if (particles.size() > max_particles)
+      for (float z = -w; z <= w; z += worldConstants::r * 0.5f)
       {
-        break;
-      }
+        if (particles.size() > max_particles)
+        {
+          goto done_init;
+        }
 
-      Particle p;
-      p.pos = glm::vec2(x, y);
-      p.pos_old = p.pos + 0.001f * glm::vec2(rand01(), rand01());
-      p.force = glm::vec2(0, 0);
-      p.sigma = 3.f;
-      p.beta = 4.f;
-      particles.push_back(p);
+        Particle p;
+        p.pos = glm::vec3(x, y, z);
+        p.pos_old = p.pos + 0.001f * glm::vec3(rand01(), rand01(), rand01());
+        p.force = glm::vec3(0, 0, 0);
+        p.sigma = 3.f;
+        p.beta = 4.f;
+        particles.push_back(p);
+      }
     }
   }
+done_init:;
 }
 
-void ParticleEmitter::emit(glm::vec2 pos)
+void ParticleEmitter::emit(glm::vec3 pos)
 {
 
   if (particles.size() > max_particles)
@@ -50,8 +54,8 @@ void ParticleEmitter::emit(glm::vec2 pos)
 
   Particle p;
   p.pos = pos;
-  p.pos_old = p.pos + 0.001f * glm::vec2(rand01(), rand01());
-  p.force = glm::vec2(0, 0);
+  p.pos_old = p.pos + 0.001f * glm::vec3(rand01(), rand01(), rand01());
+  p.force = glm::vec3(0, 0, 0);
   p.sigma = 3.f;
   p.beta = 4.f;
   particles.push_back(p);
@@ -71,7 +75,7 @@ void ParticleEmitter::destroy(int index)
 }
 */
 
-World::World() : particle_emitter{2048, -1}, indexsp{4093, worldConstants::r, true}
+World::World() : particle_emitter{2048, -1}, indexsp{4093, worldConstants::r, false}
 {
 }
 
@@ -87,7 +91,7 @@ void World::calc_velocity()
     particle_emitter.particles[i].pos += particle_emitter.particles[i].force;
 
     // Restart the forces with gravity only. We'll add the rest later.
-    particle_emitter.particles[i].force = glm::vec2(0.0f, -worldConstants::G);
+    particle_emitter.particles[i].force = glm::vec3(0.0f, -worldConstants::G, 0.0f);
 
     // Calculate the velocity for later.
     particle_emitter.particles[i].vel = particle_emitter.particles[i].pos - particle_emitter.particles[i].pos_old;
@@ -116,6 +120,10 @@ void World::calc_velocity()
     if (particle_emitter.particles[i].pos.y < worldConstants::bottom)
       particle_emitter.particles[i].force.y -= (particle_emitter.particles[i].pos.y - worldConstants::bottom) / 8;
     //if( particles[i].pos.y > SIM_W * 2 ) particles[i].force.y -= ( particles[i].pos.y - SIM_W * 2 ) / 8;
+    if (particle_emitter.particles[i].pos.z < -worldConstants::SIM_W)
+      particle_emitter.particles[i].force.z -= (particle_emitter.particles[i].pos.z - -worldConstants::SIM_W) / 8;
+    if (particle_emitter.particles[i].pos.z > worldConstants::SIM_W)
+      particle_emitter.particles[i].force.z -= (particle_emitter.particles[i].pos.z - worldConstants::SIM_W) / 8;
 
     // Handle the mouse attractor.
     // It's a simple spring based attraction to where the mouse is.
@@ -141,7 +149,7 @@ void World::calc_velocity()
   indexsp.Clear();
   for (auto &particle : particle_emitter.particles)
   {
-    indexsp.Insert(glm::vec3(particle.pos, 0.0f), &particle);
+    indexsp.Insert(particle.pos, &particle);
   }
 }
 
@@ -161,7 +169,7 @@ void World::calc_density()
     float dn = 0;
     IndexType::NeighbourList neigh;
     neigh.reserve(64);
-    indexsp.Neighbours(glm::vec3(particle_emitter.particles[i].pos, 0.0f), neigh);
+    indexsp.Neighbours(particle_emitter.particles[i].pos, neigh);
     for (int j = 0; j < (int)neigh.size(); ++j)
     {
       if (neigh[j] == &particle_emitter.particles[i])
@@ -171,7 +179,7 @@ void World::calc_density()
       }
 
       // The vector seperating the two particles
-      const glm::vec2 rij = neigh[j]->pos - particle_emitter.particles[i].pos;
+      const glm::vec3 rij = neigh[j]->pos - particle_emitter.particles[i].pos;
 
       // Along with the squared distance between
       const float rij_len2 = glm::dot(rij, rij);
@@ -226,17 +234,17 @@ void World::calc_pressure_force()
   for (int i = 0; i < (int)particle_emitter.particles.size(); ++i)
   {
     // For each of the neighbours
-    glm::vec2 dX(0);
+    glm::vec3 dX(0);
     for (const Neighbour &n : particle_emitter.particles[i].neighbours)
     {
       // The vector from Particle i to Particle j
-      const glm::vec2 rij = (*n.j).pos - particle_emitter.particles[i].pos;
+      const glm::vec3 rij = (*n.j).pos - particle_emitter.particles[i].pos;
 
       // calculate the force from the pressures calculated above
       const float dm = n.q * (particle_emitter.particles[i].press + (*n.j).press) + n.q2 * (particle_emitter.particles[i].press_near + (*n.j).press_near);
 
       // Get the direction of the force
-      const glm::vec2 D = glm::normalize(rij) * dm;
+      const glm::vec3 D = glm::normalize(rij) * dm;
       dX += D;
     }
 
@@ -266,18 +274,18 @@ void World::calc_viscosity()
     // For each of that particles neighbours
     for (const Neighbour &n : particle_emitter.particles[i].neighbours)
     {
-      const glm::vec2 rij = (*n.j).pos - particle_emitter.particles[i].pos;
+      const glm::vec3 rij = (*n.j).pos - particle_emitter.particles[i].pos;
       const float l = glm::length(rij);
       const float q = l / worldConstants::r;
 
-      const glm::vec2 rijn = (rij / l);
+      const glm::vec3 rijn = (rij / l);
       // Get the projection of the velocities onto the vector between them.
       const float u = glm::dot(particle_emitter.particles[i].vel - (*n.j).vel, rijn);
       if (u > 0)
       {
         // Calculate the viscosity impulse between the two particles
         // based on the quadratic function of projected length.
-        const glm::vec2 I = (1 - q) * ((*n.j).sigma * u + (*n.j).beta * u * u) * rijn;
+        const glm::vec3 I = (1 - q) * ((*n.j).sigma * u + (*n.j).beta * u * u) * rijn;
 
         // Apply the impulses on the current particle
         particle_emitter.particles[i].vel -= I * 0.5f;

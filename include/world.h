@@ -42,13 +42,13 @@ struct Particle
   float sigma;
   /* */
   float beta;
-  /* 2D Position of the particle */
-  glm::vec2 pos;
-  glm::vec2 pos_old;
+  /* 3D Position of the particle */
+  glm::vec3 pos;
+  glm::vec3 pos_old;
   /* Velocity of the particle */
-  glm::vec2 vel;
+  glm::vec3 vel;
   /* Force acting on the particle */
-  glm::vec2 force;
+  glm::vec3 force;
   /* Neighbour particles & their weighted distances  */
   std::vector < Neighbour > neighbours;
 };
@@ -68,7 +68,7 @@ public:
   std::vector<Particle> particles;
   ParticleEmitter(const unsigned int, const float);
   /* Emit a new particle */
-  void emit(glm::vec2);
+  void emit(glm::vec3);
   // void check_life();
   // void destroy();
 };
@@ -77,7 +77,7 @@ class World
 {
 private:
   /* Mouse as attracter */
-  glm::vec2 attractor;
+  glm::vec3 attractor;
   /* Attracter toggle */
   bool attracting;
   typedef SpatialIndex<Particle> IndexType;
