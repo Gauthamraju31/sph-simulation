@@ -24,7 +24,7 @@ ParticleEmitter::ParticleEmitter(const unsigned int N, float l) : max_particles{
     {
       for (float z = -w; z <= w; z += worldConstants::r * 0.5f)
       {
-        if (particles.size() > max_particles)
+        if (particles.size() >= max_particles)
         {
           goto done_init;
         }
@@ -121,7 +121,7 @@ void World::calc_velocity()
       particle_emitter.particles[i].force.y -= (particle_emitter.particles[i].pos.y - worldConstants::bottom) / 8;
     //if( particles[i].pos.y > SIM_W * 2 ) particles[i].force.y -= ( particles[i].pos.y - SIM_W * 2 ) / 8;
     if (particle_emitter.particles[i].pos.z < -worldConstants::SIM_W)
-      particle_emitter.particles[i].force.z -= (particle_emitter.particles[i].pos.z - -worldConstants::SIM_W) / 8;
+      particle_emitter.particles[i].force.z -= (particle_emitter.particles[i].pos.z + worldConstants::SIM_W) / 8;
     if (particle_emitter.particles[i].pos.z > worldConstants::SIM_W)
       particle_emitter.particles[i].force.z -= (particle_emitter.particles[i].pos.z - worldConstants::SIM_W) / 8;
 
@@ -244,7 +244,8 @@ void World::calc_pressure_force()
       const float dm = n.q * (particle_emitter.particles[i].press + (*n.j).press) + n.q2 * (particle_emitter.particles[i].press_near + (*n.j).press_near);
 
       // Get the direction of the force
-      const glm::vec3 D = glm::normalize(rij) * dm;
+      const float l = glm::length(rij);
+      const glm::vec3 D = (l > 1e-6f) ? (rij / l) * dm : glm::vec3(0.0f);
       dX += D;
     }
 
