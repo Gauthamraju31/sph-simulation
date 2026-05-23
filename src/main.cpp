@@ -21,18 +21,26 @@ void display( GLFWwindow* window, std::vector<Particle> particles)
     glfwGetWindowSize( window, &w, &h );
     glViewport( 0, 0, w, h ); 
 
-    // create a world with dimensions x:[-SIM_W,SIM_W] and y:[0,SIM_W*2]
+    // create a world with dimensions x:[-SIM_W,SIM_W] and y:[0,SIM_W*2] and z:[-SIM_W,SIM_W]
     glMatrixMode( GL_PROJECTION );
     glLoadIdentity();
     const double ar = w / static_cast< double >( h );
-    glOrtho( ar * -worldConstants::SIM_W, ar * worldConstants::SIM_W, 0, 2*worldConstants::SIM_W, -1, 1 );
+    glOrtho( ar * -worldConstants::SIM_W, ar * worldConstants::SIM_W, 0, 2*worldConstants::SIM_W, -worldConstants::SIM_W * 2, worldConstants::SIM_W * 2 );
 
     glMatrixMode( GL_MODELVIEW );
     glLoadIdentity();
 
+    // Add a slight rotation to demonstrate 3D perspective
+    glTranslatef(0.0f, worldConstants::SIM_W, 0.0f);
+    glRotatef(20.0f, 1.0f, 0.0f, 0.0f);
+    glRotatef(30.0f, 0.0f, 1.0f, 0.0f);
+    glTranslatef(0.0f, -worldConstants::SIM_W, 0.0f);
+
+    glEnable( GL_DEPTH_TEST );
+
     // Draw Fluid Particles
     glPointSize( worldConstants::r*2 );
-    glVertexPointer( 2, GL_FLOAT, sizeof(Particle), &particles[0].pos );
+    glVertexPointer( 3, GL_FLOAT, sizeof(Particle), &particles[0].pos );
     glColorPointer( 4, GL_FLOAT, sizeof(Particle), &particles[0].r );
     glEnableClientState( GL_VERTEX_ARRAY );
     glEnableClientState( GL_COLOR_ARRAY );
